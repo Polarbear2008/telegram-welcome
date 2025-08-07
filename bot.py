@@ -1,13 +1,29 @@
+# Import imghdr compatibility first
+import imghdr_compat  # This must be imported before any telegram imports
+
 import os
 import logging
 import random
 import json
 import asyncio
+import sys
+import time
 from datetime import datetime, timedelta
 from collections import defaultdict
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ParseMode
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
+from telegram.utils.helpers import mention_html
 from dotenv import load_dotenv
+
+# For Python 3.13+ compatibility
+if sys.version_info >= (3, 13):
+    import imghdr
+    if not hasattr(imghdr, 'test_jpeg'):
+        def test_jpeg(h, f):
+            """Test for JPEG data in Python 3.13+"""
+            if h.startswith(b'\xff\xd8'):
+                return 'jpeg'
+        imghdr.tests.append(('jpeg', test_jpeg))
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -47,101 +63,137 @@ FALLBACK_STICKERS = [
     'CAACAgIAAxkBAAIBTGYHcYVgAAEAlbpV5XKJZ2X2Z2ZmZmYAAhQAA8A2TxNZlm5MOV80JTQE'    # direct hit
 ]
 
+# Track which jokes and quotes have been used
+used_joke_indices = set()
+used_quote_indices = set()
+
+# Store recently used jokes and quotes to prevent repetition
+recent_jokes = []
+recent_quotes = []
+
+def get_random_joke():
+    """Get a random joke that hasn't been used recently."""
+    global recent_jokes, used_joke_indices
+    
+    # If we've used all jokes, reset the tracking
+    if len(used_joke_indices) >= len(JOKES):
+        used_joke_indices = set()
+        recent_jokes = []
+    
+    # Get a random joke that hasn't been used in this cycle
+    available_indices = set(range(len(JOKES))) - used_joke_indices
+    if not available_indices:
+        used_joke_indices = set()
+        recent_jokes = []
+        available_indices = set(range(len(JOKES)))
+    
+    # Choose a random index from available ones
+    chosen_index = random.choice(list(available_indices))
+    used_joke_indices.add(chosen_index)
+    joke = JOKES[chosen_index]
+    
+    # Add to recent jokes to prevent immediate repetition
+    recent_jokes.append(joke)
+    if len(recent_jokes) > 5:  # Keep track of last 5 jokes
+        recent_jokes.pop(0)
+        
+    return joke
+
+def get_random_quote():
+    """Get a random quote that hasn't been used recently."""
+    global recent_quotes, used_quote_indices
+    
+    # If we've used all quotes, reset the tracking
+    if len(used_quote_indices) >= len(QUOTES):
+        used_quote_indices = set()
+        recent_quotes = []
+    
+    # Get a random quote that hasn't been used in this cycle
+    available_indices = set(range(len(QUOTES))) - used_quote_indices
+    if not available_indices:
+        used_quote_indices = set()
+        recent_quotes = []
+        available_indices = set(range(len(QUOTES)))
+    
+    # Choose a random index from available ones
+    chosen_index = random.choice(list(available_indices))
+    used_quote_indices.add(chosen_index)
+    quote = QUOTES[chosen_index]
+    
+    # Add to recent quotes to prevent immediate repetition
+    recent_quotes.append(quote)
+    if len(recent_quotes) > 5:  # Keep track of last 5 quotes
+        recent_quotes.pop(0)
+        
+    return quote
+
 # Jokes database
 JOKES = [
-    "Why don't scientists trust atoms? Because they make up everything!",
+    "Sometimes I think back on all the people I’ve lost and remember why I stopped being a tour guide.",
+    "Give a man a match, and he’ll be warm for a few hours. Set him on fire, and he’ll be warm for the rest of his life.",
+    "You don’t need a parachute to go skydiving. You need a parachute to go skydiving twice.",
+    "My grandfather said my generation relies too much on the latest technology. I called him a hypocrite and unplugged his life support.",
+    "I’ll never forget my father’s last words to me just before he died: “Are you sure you fixed the brakes?”",
+    "My senior relatives liked to tease me at weddings, saying things like, “You’ll be next!” But they stopped after I started saying that to them at funerals.",
+    "Happy 70th birthday. At last, you can live undisturbed by life insurance agents!",
+    "Why is it that if you donate one kidney, people love you, but if you donate five kidneys, they call the police?",
+    "My mother told me, “One man’s trash is another man’s treasure.” Terrible way to learn I’m adopted.",
+    "How do you turn any salad into a Caesar salad? Stab it 23 times.",
+    "An apple a day keeps the doctor away… If you choke on it.",
+    "What’s the difference between a baby and a sweet potato? About 140 calories.",
+    "Why are cigarettes good for the environment? They kill people.",
+    "When does a dark joke become a dad joke? When it goes out for milk and never comes back.",
+"Doctor: “I’m afraid I have some very bad news: You’re dying and don’t have much time left.” Patient: “Oh, that’s terrible! Doc, how long have I got?” Doctor: “Ten.” Patient: “Ten? Ten what? Months? Weeks?!” Doctor: “Nine … eight…”",
     "I'm not arguing, I'm just explaining why I'm right.",
-    "I told my wife she was drawing her eyebrows too high. She looked surprised.",
     "Parallel lines have so much in common… it's a shame they'll never meet.",
-    "I threw a boomerang a few years ago. I now live in constant fear.",
     "Why don't skeletons fight each other? They don't have the guts.",
     "My boss told me to have a good day… so I went home.",
-    "I told my computer I needed a break, and now it won't stop sending me beach wallpapers.",
-    "Why did the scarecrow win an award? Because he was outstanding in his field.",
-    "I'm not lazy, I'm just on energy-saving mode.",
+    "They say laughter is the best medicine. That's why I laugh at people with cancer.",
     "Why do cows wear bells? Because their horns don't work.",
-    "Why can't your nose be 12 inches long? Because then it would be a foot.",
-    "I used to play piano by ear, but now I use my hands.",
-    "I have a split personality, said Tom, being Frank.",
-    "Don't trust atoms. They make up everything.",
-    "If I had a dollar for every time I got distracted… I wish I had a puppy.",
-    "Why did the chicken join a band? Because it had the drumsticks.",
-    "I asked the gym instructor if he could teach me to do the splits. He replied, 'How flexible are you?' I said, 'I can't make it on Tuesdays.'",
-    "The rotation of the earth really makes my day.",
+    "Give a man a match, and he'll be warm for a few minutes. Set him on fire, and he’ll be warm for the rest of his life.",
+    "What's red and bad for your teeth? A brick",
+    "Some people graduate with honors. I am just honored to graduate.",
     "Did you hear about the claustrophobic astronaut? He just needed a little space.",
-    "I used to be indecisive. Now I'm not sure.",
-    "A clean house is a sign of a broken computer.",
-    "I wasn't originally going to get a brain transplant, but then I changed my mind.",
-    "Why don't some couples go to the gym? Because some relationships don't work out.",
-    "What's orange and sounds like a parrot? A carrot.",
-    "Why did the coffee file a police report? It got mugged.",
+    "Why can’t orphans play baseball? Because they don’t know where home is.",
     "I'm great at multitasking. I can waste time, be unproductive, and procrastinate all at once.",
-    "My therapist says I have a preoccupation with vengeance. We'll see about that.",
+    "What's the difference between a snowman and a snowwoman? Snowballs.",
     "I'm reading a book on anti-gravity. It's impossible to put down.",
     "I'm not addicted to caffeine. We're just in a committed relationship.",
     "I know they say that money talks, but all mine says is 'Goodbye.'",
-    "I told my wife she should embrace her mistakes… She gave me a hug.",
-    "I'm on a seafood diet. I see food and I eat it.",
     "The man who invented autocorrect should burn in hello.",
     "Life is short. Smile while you still have teeth.",
-    "I started out with nothing, and I still have most of it.",
-    "If you think nobody cares if you're alive, try missing a couple of car payments.",
-    "I dream of a better world where chickens can cross the road without having their motives questioned.",
-    "Insomnia is awful. But on the plus side – only three more sleeps until Christmas.",
     "I broke my finger last week. On the other hand, I'm okay.",
     "I'm writing a book on reverse psychology. Don't buy it.",
     "Some people graduate with honors, I am just honored to graduate.",
     "Alcohol doesn't solve any problems, but neither does milk.",
-    "Why do bees have sticky hair? Because they use honeycombs.",
-    "Age is just a number. In my case, a very big one.",
     "Dark humor is like food. Not everyone gets it.",
     "I'm not short. I'm just more down to Earth than other people.",
-    "I used to be a narcissist… but now I'm just perfect.",
     "Sometimes I wonder if I'm a good person, then I remember I give people my Netflix password.",
-    "If you think education is expensive, try ignorance.",
     "Whoever stole my copy of Microsoft Office, I will find you. You have my Word.",
-    "I know I'm a catch. I just forgot what kind of bait I need.",
     "They say love is blind. Marriage is a real eye-opener.",
-    "Sometimes I shock myself with the smart stuff I say. Then I laugh and go get some snacks.",
-    "Puns about monorails always make for decent one-liners.",
     "Why did the golfer bring two pairs of pants? In case he got a hole in one.",
     "If we shouldn't eat at night, why is there a light in the fridge?",
     "I'm not weird. I'm limited edition.",
-    "I'm not lazy, I'm on standby mode.",
     "I'm writing a book on how to fall down stairs. It's a step-by-step guide.",
     "When life shuts a door… open it again. It's a door. That's how they work.",
     "I tried to be normal once. Worst two minutes of my life.",
-    "Sarcasm: because beating people is illegal.",
     "Dear Math, I'm not a therapist. Solve your own problems.",
     "Zombies eat brains. Don't worry, you're safe.",
-    "You think you're smarter than me? I graduated in the top 90% of my class!",
     "My password is the last 8 digits of π. Good luck.",
-    "I'm not shy. I'm just holding back my awesomeness so I don't intimidate you.",
-    "I got a job at a bakery because I kneaded dough.",
     "People say nothing is impossible, but I do nothing every day.",
-    "When life gives you melons, you might be dyslexic.",
-    "I like to name my dog 'Five Miles' so I can say I walk Five Miles every day.",
     "If Monday had a face, I'd punch it.",
-    "I don't have an attitude problem. You have a perception problem.",
     "Don't you hate it when someone answers their own questions? I do.",
-    "Not all math puns are bad. Just sum.",
     "My life feels like a test I didn't study for.",
     "I can handle pain. Until it hurts.",
     "My brain has too many tabs open.",
     "If I were a superhero, my power would be napping.",
-    "I'm not great at the advice. Can I interest you in a sarcastic comment?",
-    "They say don't try this at home… so I went to my friend's house.",
     "I asked Siri why I'm still single. She opened the front camera.",
-    "I ate a clock yesterday. It was very time-consuming.",
-    "I'm reading a horror story in Braille. Something bad is going to happen, I can feel it.",
+    "What's the difference between a piano and a dead body? I don’t play piano in my basement.",
     "My favorite machine at the gym is the vending machine.",
     "If at first you don't succeed, then skydiving definitely isn't for you.",
     "Don't worry if plan A doesn't work out. There are 25 more letters.",
-    "I don't have gray hair, I have wisdom highlights.",
     "The difference between stupidity and genius is that genius has its limits.",
-    "I accidentally handed my wife a glue stick instead of chapstick. She still isn't talking to me.",
-    "I asked the librarian if the library had books on paranoia. She whispered, 'They're right behind you…'",
-    "Time flies like an arrow. Fruit flies like a banana.",
+     "Why did the orphan rob the bank? To feel wanted.",
     "Before you judge someone, walk a mile in their shoes. Then you're a mile away and you have their shoes."
 ]
 
@@ -252,7 +304,7 @@ if not TOKEN or TOKEN == 'your_bot_token_here':
     logger.error('No valid bot token found in .env file')
     exit(1)
 
-async def track_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def track_activity(update: Update, context: CallbackContext):
     """Track user activity for active member stats."""
     if not update.message or not update.effective_user:
         return
@@ -280,81 +332,80 @@ async def track_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         monthly_stats.clear()
         last_monthly_reset = now
 
-async def send_random_sticker(chat_id, context):
+def send_random_sticker(chat_id, context):
     """Send a random sticker to the chat."""
     max_retries = 5  # Increased number of retries
     last_error = None
     
-    # First, try fallback stickers
+    # First try fallback stickers
     for _ in range(max_retries):
         try:
             sticker_id = random.choice(FALLBACK_STICKERS)
-            await context.bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
+            context.bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
             return True
         except Exception as e:
             last_error = e
             logger.warning(f"Fallback sticker attempt failed: {e}")
-            await asyncio.sleep(0.5)  # Small delay between retries
+            time.sleep(0.5)  # Small delay between retries
     
     # If fallback stickers fail, try sticker sets
     if STICKER_SETS:
         for _ in range(max_retries):
             try:
                 sticker_set_name = random.choice(STICKER_SETS)
-                sticker_set = await context.bot.get_sticker_set(sticker_set_name)
+                sticker_set = context.bot.get_sticker_set(sticker_set_name)
                 if sticker_set.stickers:
                     sticker = random.choice(sticker_set.stickers)
-                    await context.bot.send_sticker(chat_id=chat_id, sticker=sticker.file_id)
+                    context.bot.send_sticker(chat_id=chat_id, sticker=sticker.file_id)
                     return True
             except Exception as e:
                 last_error = e
                 logger.warning(f"Sticker set attempt failed: {e}")
-                await asyncio.sleep(0.5)
+                time.sleep(0.5)
     
     # If we get here, all attempts failed
     error_msg = f"All attempts to send sticker failed. Last error: {last_error}"
     logger.error(error_msg)
     raise Exception(error_msg)
 
-async def sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def sticker(update: Update, context: CallbackContext):
     """Send a random sticker."""
     try:
         # Send a typing action to show the bot is working
-        await context.bot.send_chat_action(
+        context.bot.send_chat_action(
             chat_id=update.effective_chat.id,
-            action='choose_sticker'
+            action='typing'
         )
         
-        # Send the sticker with retries
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
-                await send_random_sticker(update.effective_chat.id, context)
+                send_random_sticker(update.effective_chat.id, context)
                 return  # Success, exit the function
                 
             except Exception as e:
-                logger.warning(f"Sticker attempt {attempt + 1} failed: {e}")
+                logger.error(f"Sticker attempt {attempt + 1} failed: {e}")
                 if attempt == max_attempts - 1:  # Last attempt
                     raise
-                await asyncio.sleep(1)  # Wait before retry
+                time.sleep(1)  # Wait before retry
                 
     except Exception as e:
         logger.error(f"All sticker attempts failed: {e}")
         try:
             # As a last resort, try to send a text message
-            await update.message.reply_text(
+            update.message.reply_text(
                 "🎭 Sticker service is temporarily unavailable. "
                 "I'll be back with more stickers soon! 🎨"
             )
         except Exception as text_error:
             logger.error(f"Failed to send error message: {text_error}")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     """Send a message when the command /start is issued."""
     logger.info(f"Start command received from {update.effective_user.id}")
     try:
         # Send welcome message
-        await update.message.reply_text(
+        update.message.reply_text(
             '👋 Welcome to the group! I am your welcome bot.\n\n'
             'Available commands:\n'
             '/joke - Get a random joke\n'
@@ -365,33 +416,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         # Send a welcome sticker
-        await send_random_sticker(update.effective_chat.id, context)
+        send_random_sticker(update.effective_chat.id, context)
     except Exception as e:
         logger.error(f"Error in start command: {e}")
 
-async def joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def joke(update: Update, context: CallbackContext):
     """Send a random joke."""
     try:
-        joke = random.choice(JOKES)
-        await update.message.reply_text(f"🎭 {joke}")
+        joke = get_random_joke()
+        update.message.reply_text(f"🎭 {joke}")
     except Exception as e:
         logger.error(f"Error in joke command: {e}")
-        await update.message.reply_text("I'm all out of jokes for now!")
+        update.message.reply_text("I'm all out of jokes for now!")
 
-async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def quote(update: Update, context: CallbackContext):
     """Send a random inspirational quote."""
     try:
-        quote, author = random.choice(QUOTES)
-        await update.message.reply_text(f'"{quote}"\n— {author}')
+        quote, author = get_random_quote()
+        update.message.reply_text(f'"{quote}"\n— {author}')
     except Exception as e:
         logger.error(f"Error in quote command: {e}")
-        await update.message.reply_text("I'm fresh out of wisdom for now!")
+        update.message.reply_text("I'm fresh out of wisdom for now!")
 
-async def top_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def top_weekly(update: Update, context: CallbackContext):
     """Show most active members this week."""
     try:
         if not weekly_stats:
-            await update.message.reply_text("No activity stats for this week yet!")
+            update.message.reply_text("No activity stats for this week yet!")
             return
             
         sorted_users = sorted(weekly_stats.items(), key=lambda x: x[1], reverse=True)[:10]
@@ -403,16 +454,16 @@ async def top_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_name = user.get('full_name', 'Unknown User')
             message += f"{idx}. {full_name} (@{username}): {count} messages\n"
             
-        await update.message.reply_text(message, parse_mode='Markdown')
+        update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error in top_weekly command: {e}")
-        await update.message.reply_text("Couldn't fetch weekly stats right now.")
+        update.message.reply_text("Couldn't fetch weekly stats right now.")
 
-async def top_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def top_monthly(update: Update, context: CallbackContext):
     """Show most active members this month."""
     try:
         if not monthly_stats:
-            await update.message.reply_text("No activity stats for this month yet!")
+            update.message.reply_text("No activity stats for this month yet!")
             return
             
         sorted_users = sorted(monthly_stats.items(), key=lambda x: x[1], reverse=True)[:10]
@@ -424,24 +475,24 @@ async def top_monthly(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_name = user.get('full_name', 'Unknown User')
             message += f"{idx}. {full_name} (@{username}): {count} messages\n"
             
-        await update.message.reply_text(message, parse_mode='Markdown')
+        update.message.reply_text(message, parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error in top_monthly command: {e}")
-        await update.message.reply_text("Couldn't fetch monthly stats right now.")
+        update.message.reply_text("Couldn't fetch monthly stats right now.")
 
-async def left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def left_chat_member(update: Update, context: CallbackContext):
     """Send a message when a member leaves the group."""
     left_member = update.message.left_chat_member
     if left_member and left_member.id != context.bot.id:  # Don't send message if bot is the one who left
         try:
-            await update.message.reply_text(
+            update.message.reply_text(
                 f"👋 {left_member.mention_html()}, we're sorry to see you go! You'll be missed!",
                 parse_mode='HTML'
             )
         except Exception as e:
             logger.error(f"Error sending left chat message: {e}")
 
-async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def new_member(update: Update, context: CallbackContext):
     """Send a welcome message when a new member joins the group."""
     logger.info("=== NEW MEMBER DETECTED ===")
     logger.info(f"Update content: {update}")
@@ -461,16 +512,16 @@ async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             try:
                 # Get member count
-                chat_member_count = await context.bot.get_chat_member_count(update.effective_chat.id)
+                chat_member_count = context.bot.get_chat_member_count(update.effective_chat.id)
                 
                 # Create welcome message with proper MarkdownV2 escaping
                 welcome_msg = (
-                    f"👋 Welcome {member.mention_markdown_v2()} to the group\!\n"
+                    f"👋 Welcome {member.mention_markdown_v2()} to the group!\n"
                     f"You are member {'#' + str(chat_member_count)} 🎉"
                 )
                 
                 # Send welcome message
-                await context.bot.send_message(
+                context.bot.send_message(
                     chat_id=update.effective_chat.id,
                     text=welcome_msg,
                     parse_mode='MarkdownV2',
@@ -478,7 +529,7 @@ async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 
                 # Send a welcome sticker
-                await send_random_sticker(update.effective_chat.id, context)
+                send_random_sticker(update.effective_chat.id, context)
                 logger.info(f"Welcome message sent to {member.full_name}")
                 
             except Exception as e:
@@ -495,14 +546,14 @@ async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Check if the new member is the bot itself
             if member.is_bot and member.id == context.bot.id:
                 logger.info("Bot was added to a new group")
-                await update.message.reply_text(
+                update.message.reply_text(
                     "🤖 Thanks for adding me! I'll welcome new members to this group. "
                     "Make me an admin to get the best experience! 🚀"
                 )
                 return
             
             # Get member count for fun stats
-            chat_member_count = await context.bot.get_chat_member_count(update.effective_chat.id)
+            chat_member_count = context.bot.get_chat_member_count(update.effective_chat.id)
             
             # Random emoji for variety
             import random
@@ -523,7 +574,7 @@ async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Get user profile photo if available
             try:
-                photos = await context.bot.get_user_profile_photos(member.id, limit=1)
+                photos = context.bot.get_user_profile_photos(member.id, limit=1)
                 has_photo = bool(photos.photos)
             except Exception as e:
                 logger.warning(f"Couldn't get profile photo: {e}")
@@ -543,7 +594,7 @@ async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             welcome_message += "\n\n_Type /help to see what I can do!"
             
             # Send the welcome message
-            await update.message.reply_text(
+            update.message.reply_text(
                 welcome_message,
                 parse_mode='MarkdownV2',
                 disable_web_page_preview=True
@@ -556,7 +607,7 @@ async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'CAACAgIAAxkBAAELVgJmB2iJZ2X2Z2ZmZmZmZmZmZmZmZgACBAADwDZPE1mWbkw5XzQlNAQ'   # 🎊 confetti
             ]
             try:
-                await context.bot.send_sticker(
+                context.bot.send_sticker(
                     chat_id=update.effective_chat.id,
                     sticker=random.choice(stickers),
                     reply_to_message_id=update.message.message_id
@@ -568,103 +619,65 @@ async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error in new_member: {e}")
             try:
                 # Fallback simple welcome with HTML parsing instead of Markdown
-                await update.message.reply_text(
+                update.message.reply_text(
                     f"👋 Welcome aboard MATE, {member.mention_html()}! 🎉",
                     parse_mode='HTML'
                 )
             except Exception as fallback_error:
                 logger.error(f"Fallback welcome failed: {fallback_error}")
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+def error_handler(update: object, context: CallbackContext): 
     """Log errors caused by Updates."""
     logger.error(f"Error while processing update: {update}", exc_info=context.error)
 
-async def check_bot_info(bot):
+def check_bot_info(bot):
     """Check bot info and permissions."""
     try:
-        me = await bot.get_me()
+        me = bot.get_me()
         logger.info(f"Bot info: @{me.username} (ID: {me.id})")
         return True
     except Exception as e:
         logger.error(f"Failed to get bot info: {e}")
         return False
 
-async def main_async():
-    """Async entry point for the bot."""
-    try:
-        # Create the Application with proper event loop
-        application = (
-            Application.builder()
-            .token(TOKEN)
-            .build()
-        )
-        logger.info("Application created successfully")
-        
-        # Check bot info and permissions
-        if not await check_bot_info(application.bot):
-            logger.error("Failed to initialize bot. Check your token and internet connection.")
-            return
-        
-        # Add command handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("joke", joke))
-        application.add_handler(CommandHandler("quote", quote))
-        application.add_handler(CommandHandler("sticker", sticker))
-        application.add_handler(CommandHandler("topweekly", top_weekly))
-        application.add_handler(CommandHandler("topmonthly", top_monthly))
-        
-        # Handle new members and left members
-        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, new_member))
-        application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, left_chat_member))
-        
-        # Track all messages for activity
-        application.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            track_activity
-        ))
-        
-        # Error handler
-        application.add_error_handler(error_handler)
-        
-        logger.info("All handlers registered")
-        
-        # Log bot info
-        me = await application.bot.get_me()
-        logger.info(f"Starting bot: @{me.username} (ID: {me.id})")
-        logger.info("Bot is running. Press Ctrl+C to stop")
-        
-        # Start the Bot
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
-        
-        # Keep the bot running
-        while True:
-            await asyncio.sleep(1)
-            
-    except Exception as e:
-        logger.error(f"Error in main_async: {e}")
-        raise
-
 def main():
     """Start the bot."""
     try:
-        # Create a new event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Create the Updater and pass it your bot's token
+        updater = Updater(TOKEN)
+        dp = updater.dispatcher
         
-        # Run the bot
-        loop.run_until_complete(main_async())
+        # Add command handlers
+        dp.add_handler(CommandHandler("start", start))
+        dp.add_handler(CommandHandler("joke", joke))
+        dp.add_handler(CommandHandler("quote", quote))
+        dp.add_handler(CommandHandler("sticker", sticker))
+        dp.add_handler(CommandHandler("topweekly", top_weekly))
+        dp.add_handler(CommandHandler("topmonthly", top_monthly))
         
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+        # Handle new members
+        dp.add_handler(MessageHandler(Filters.status_update.new_chat_members, new_member))
+        dp.add_handler(MessageHandler(Filters.status_update.left_chat_member, left_chat_member))
+        
+        # Track all messages for activity
+        dp.add_handler(MessageHandler(
+            Filters.text & ~Filters.command,
+            track_activity
+        ))
+        
+        # Log all errors
+        dp.add_error_handler(error_handler)
+        
+        # Start the Bot
+        logger.info("Starting bot...")
+        updater.start_polling()
+        
+        # Run the bot until you press Ctrl-C
+        updater.idle()
+        
     except Exception as e:
         logger.error(f"Bot stopped with error: {e}")
-    finally:
-        # Cleanup
-        if 'loop' in locals():
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
+        raise
 
 if __name__ == '__main__':
     main()
