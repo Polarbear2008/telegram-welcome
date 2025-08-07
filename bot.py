@@ -8,9 +8,10 @@ import json
 import asyncio
 import sys
 import time
+from telegram.ext import PicklePersistence
 from datetime import datetime, timedelta
 from collections import defaultdict
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ParseMode
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ParseMode, StickerSet
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 from telegram.utils.helpers import mention_html
 from dotenv import load_dotenv
@@ -334,19 +335,33 @@ def track_activity(update: Update, context: CallbackContext):
 
 def send_random_sticker(chat_id, context):
     """Send a random sticker to the chat."""
-    max_retries = 5  # Increased number of retries
+    max_retries = 3  # Reduced number of retries
     last_error = None
     
-    # First try fallback stickers
-    for _ in range(max_retries):
+    # Try to send a simple text message if stickers fail
+    def send_fallback_message():
         try:
-            sticker_id = random.choice(FALLBACK_STICKERS)
-            context.bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
+            context.bot.send_message(
+                chat_id=chat_id,
+                text="🎭 Here's a virtual sticker for you! 🎭",
+                parse_mode=ParseMode.HTML
+            )
             return True
         except Exception as e:
-            last_error = e
-            logger.warning(f"Fallback sticker attempt failed: {e}")
-            time.sleep(0.5)  # Small delay between retries
+            logger.error(f"Failed to send fallback message: {e}")
+            return False
+    
+    # First try fallback stickers
+    if FALLBACK_STICKERS:
+        for _ in range(max_retries):
+            try:
+                sticker_id = random.choice(FALLBACK_STICKERS)
+                context.bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
+                return True
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Fallback sticker attempt failed: {e}")
+                time.sleep(0.5)  # Small delay between retries
     
     # If fallback stickers fail, try sticker sets
     if STICKER_SETS:
@@ -354,7 +369,7 @@ def send_random_sticker(chat_id, context):
             try:
                 sticker_set_name = random.choice(STICKER_SETS)
                 sticker_set = context.bot.get_sticker_set(sticker_set_name)
-                if sticker_set.stickers:
+                if hasattr(sticker_set, 'stickers') and sticker_set.stickers:
                     sticker = random.choice(sticker_set.stickers)
                     context.bot.send_sticker(chat_id=chat_id, sticker=sticker.file_id)
                     return True
@@ -365,6 +380,11 @@ def send_random_sticker(chat_id, context):
     
     # If we get here, all attempts failed
     error_msg = f"All attempts to send sticker failed. Last error: {last_error}"
+    logger.error(error_msg)
+    
+    # Try to send a fallback message
+    if not send_fallback_message():
+        logger.error("Failed to send fallback message after sticker failure")
     logger.error(error_msg)
     raise Exception(error_msg)
 
@@ -643,8 +663,9 @@ def check_bot_info(bot):
 def main():
     """Start the bot."""
     try:
-        # Create the Updater and pass it your bot's token
-        updater = Updater(TOKEN)
+        # Create the Updater with persistence
+        persistence = PicklePersistence(filename='bot_data')
+        updater = Updater(TOKEN, use_context=True, persistence=persistence)
         dp = updater.dispatcher
         
         # Add command handlers
