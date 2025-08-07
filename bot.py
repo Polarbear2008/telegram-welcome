@@ -42,26 +42,18 @@ monthly_stats = defaultdict(int)
 last_weekly_reset = datetime.now()
 last_monthly_reset = datetime.now()
 
-# Sticker set names from popular Telegram sticker packs
-STICKER_SETS = [
-    'MemeFun',  # Funny memes
-    'FunnyPanda',  # Cute panda stickers
-    'CuteAnimals',  # Cute animal stickers
-]
-
-# Fallback sticker file IDs if sticker sets fail
-# These are common sticker file IDs that should work in most cases
-FALLBACK_STICKERS = [
-    'CAACAgIAAxkBAAIBOmYHcYVgAAH2lLpV5XKJZ2X2Z2ZmZmYAAgIAA8A2TxNZlm5MOV80JTQE',  # smiley
-    'CAACAgIAAxkBAAIBPGYHcYVgAAH4lLpV5XKJZ2X2Z2ZmZmYAAgQAA8A2TxNZlm5MOV80JTQE',  # tada
-    'CAACAgIAAxkBAAIBPmYHcYVgAAH5lLpV5XKJZ2X2Z2ZmZmYAAgUAA8A2TxNZlm5MOV80JTQE',  # confetti
-    'CAACAgIAAxkBAAIBQGYHcYVgAAH6lLpV5XKJZ2X2Z2ZmZmYAAgYAA8A2TxNZlm5MOV80JTQE',  # balloon
-    'CAACAgIAAxkBAAIBQmYHcYVgAAH7lLpV5XKJZ2X2Z2ZmZmYAAgcAA8A2TxNZlm5MOV80JTQE',   # trophy
-    'CAACAgQAAxkBAAIBRGYHcYVgAAH8lLpV5XKJZ2X2Z2ZmZmYAAhAAAwEAA1KNYjFjW6s7vzQlNAQ',  # thumbs up
-    'CAACAgIAAxkBAAIBRmYHcYVgAAH9lLpV5XKJZ2X2Z2ZmZmYAAhEAA8A2TxNZlm5MOV80JTQE',   # face with tears of joy
-    'CAACAgIAAxkBAAIBSGYHcYVgAAH-lLpV5XKJZ2X2Z2ZmZmYAAhIAA8A2TxNZlm5MOV80JTQE',   # red heart
-    'CAACAgIAAxkBAAIBSmYHcYVgAAH_lLpV5XKJZ2X2Z2ZmZmYAAhMAA8A2TxNZlm5MOV80JTQE',   # smiling face with heart-eyes
-    'CAACAgIAAxkBAAIBTGYHcYVgAAEAlbpV5XKJZ2X2Z2ZmZmYAAhQAA8A2TxNZlm5MOV80JTQE'    # direct hit
+# List of emoji stickers that can be sent directly
+EMOJI_STICKERS = [
+    '😊',  # Smiling face with smiling eyes
+    '🎉',  # Party popper
+    '🎊',  # Confetti ball
+    '🎈',  # Balloon
+    '🏆',  # Trophy
+    '👍',  # Thumbs up
+    '😂',  # Face with tears of joy
+    '❤️',  # Red heart
+    '😍',  # Smiling face with heart-eyes
+    '🎯'   # Direct hit
 ]
 
 # Track which jokes and quotes have been used
@@ -334,59 +326,31 @@ def track_activity(update: Update, context: CallbackContext):
         last_monthly_reset = now
 
 def send_random_sticker(chat_id, context):
-    """Send a random sticker to the chat."""
-    max_retries = 3  # Reduced number of retries
-    last_error = None
-    
-    # Try to send a simple text message if stickers fail
-    def send_fallback_message():
+    """Send a random emoji as a sticker to the chat."""
+    try:
+        # Choose a random emoji from our list
+        emoji = random.choice(EMOJI_STICKERS)
+        
+        # Send the emoji as a sticker
+        context.bot.send_sticker(
+            chat_id=chat_id,
+            sticker=emoji
+        )
+        return True
+        
+    except Exception as e:
+        # If sending as a sticker fails, send the emoji as text
+        logger.warning(f"Failed to send emoji as sticker: {e}")
         try:
             context.bot.send_message(
                 chat_id=chat_id,
-                text="🎭 Here's a virtual sticker for you! 🎭",
+                text=f"{emoji} {emoji} {emoji}",
                 parse_mode=ParseMode.HTML
             )
             return True
-        except Exception as e:
-            logger.error(f"Failed to send fallback message: {e}")
+        except Exception as e2:
+            logger.error(f"Failed to send fallback message: {e2}")
             return False
-    
-    # First try fallback stickers
-    if FALLBACK_STICKERS:
-        for _ in range(max_retries):
-            try:
-                sticker_id = random.choice(FALLBACK_STICKERS)
-                context.bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
-                return True
-            except Exception as e:
-                last_error = e
-                logger.warning(f"Fallback sticker attempt failed: {e}")
-                time.sleep(0.5)  # Small delay between retries
-    
-    # If fallback stickers fail, try sticker sets
-    if STICKER_SETS:
-        for _ in range(max_retries):
-            try:
-                sticker_set_name = random.choice(STICKER_SETS)
-                sticker_set = context.bot.get_sticker_set(sticker_set_name)
-                if hasattr(sticker_set, 'stickers') and sticker_set.stickers:
-                    sticker = random.choice(sticker_set.stickers)
-                    context.bot.send_sticker(chat_id=chat_id, sticker=sticker.file_id)
-                    return True
-            except Exception as e:
-                last_error = e
-                logger.warning(f"Sticker set attempt failed: {e}")
-                time.sleep(0.5)
-    
-    # If we get here, all attempts failed
-    error_msg = f"All attempts to send sticker failed. Last error: {last_error}"
-    logger.error(error_msg)
-    
-    # Try to send a fallback message
-    if not send_fallback_message():
-        logger.error("Failed to send fallback message after sticker failure")
-    logger.error(error_msg)
-    raise Exception(error_msg)
 
 def sticker(update: Update, context: CallbackContext):
     """Send a random sticker."""
